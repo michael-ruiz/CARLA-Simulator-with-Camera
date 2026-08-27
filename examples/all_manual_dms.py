@@ -1176,7 +1176,8 @@ class CameraManager(object):
             self.video_writer = cv2.VideoWriter(self.video_file, fourcc, self.fps, self.frame_size)
 
             # Start RealSense recording
-            self.realsense_manager.start_recording()
+            if self.realsense_manager is not None:
+                self.realsense_manager.start_recording()
 
             self.hud.notification("🎥 Recording BOTH cameras (T pressed)")
         else:
@@ -1185,7 +1186,8 @@ class CameraManager(object):
             self.video_writer = None
 
             # Stop RealSense recording
-            self.realsense_manager.stop_recording()
+            if self.realsense_manager is not None:
+                self.realsense_manager.stop_recording()
 
             self.hud.notification("⏹️ Stopped recording BOTH cameras")
 
@@ -1195,7 +1197,7 @@ class CameraManager(object):
             display.blit(self.surface, (0, 0))
 
         # Render RealSense camera in top-left corner
-        realsense_frame = self.realsense_manager.get_latest_frame()
+        realsense_frame = self.realsense_manager.get_latest_frame() if self.realsense_manager is not None else None
         if realsense_frame is not None:
             # Convert BGR (OpenCV) to RGB (Pygame)
             realsense_frame_rgb = cv2.cvtColor(realsense_frame, cv2.COLOR_BGR2RGB)
@@ -1316,17 +1318,23 @@ def game_loop(args):
             print(f"Warning: ActionProcessor failed to load: {e}")
 
         # Initialize RealSense camera
-        print("Initializing RealSense camera...")
-        realsense_manager = RealSenseManager(
-            gaze_processor=gaze_processor,
-            spoof_processor=spoof_processor,
-            action_processor=action_processor)
-        print("RealSense camera initialized successfully!")
+        if args.no_realsense:
+            print("Skipping RealSense camera (--no-realsense)")
+            realsense_manager = None
+        else:
+            print("Initializing RealSense camera...")
+            realsense_manager = RealSenseManager(
+                gaze_processor=gaze_processor,
+                spoof_processor=spoof_processor,
+                action_processor=action_processor)
+            print("RealSense camera initialized successfully!")
 
         # Initialize CARLA
         client = carla.Client(args.host, args.port)
         client.set_timeout(2.0)
-        display = pygame.display.set_mode((args.width, args.height), pygame.HWSURFACE | pygame.DOUBLEBUF)
+        screen = pygame.display.set_mode((args.display_width, args.display_height), pygame.HWSURFACE | pygame.DOUBLEBUF)
+        scaling = (args.display_width != args.width or args.display_height != args.height)
+        display = pygame.Surface((args.width, args.height)) if scaling else screen
         hud = HUD(args.width, args.height)
         world = World(client.get_world(), hud, args.filter, realsense_manager)
         controller = DualControl(world, args.autopilot)
@@ -1338,6 +1346,8 @@ def game_loop(args):
                 return
             world.tick(clock)
             world.render(display)
+            if scaling:
+                pygame.transform.scale(display, (args.display_width, args.display_height), screen)
             pygame.display.flip()
 
     finally:
@@ -1374,7 +1384,6 @@ def game_loop(args):
                     print(f"{_name} processor cleanup error: {e}")
 
         pygame.quit()
-        sys.exit(0)
 
 
 # ==============================================================================
@@ -1388,8 +1397,14 @@ def main():
     parser.add_argument('-a', '--autopilot', action='store_true')
     parser.add_argument('--res', default='2560x1440') # 3 screens 7680x1440
     parser.add_argument('--filter', default='vehicle.taxi.ford')
+    parser.add_argument('--no-realsense', action='store_true', help='Skip RealSense camera initialization')
+    parser.add_argument('--display-res', default=None, help='Physical display resolution (e.g. 7680x1440); render surface scales up to fill it')
     args = parser.parse_args()
     args.width, args.height = [int(x) for x in args.res.split('x')]
+    if args.display_res:
+        args.display_width, args.display_height = [int(x) for x in args.display_res.split('x')]
+    else:
+        args.display_width, args.display_height = args.width, args.height
     logging.basicConfig(level=logging.INFO)
 
     print("="*60)
